@@ -34,6 +34,16 @@ The PostgreSQL database volume persists across container recreation. Schema chan
 
 The transfer in `app/main.ts` runs at PostgreSQL `READ COMMITTED`. In one transaction it claims the idempotency key, locks both account rows in ascending ID order using `SELECT ... FOR UPDATE`, rechecks the source balance, inserts the transfer, updates both balances, and inserts balanced debit and credit entries. The database commits all writes together or rolls them back together. Row locks cover this two-account invariant without Serializable's broader conflict detection and serialization retries. See [docs/isolation.md](docs/isolation.md).
 
+Every `POST /transfers` requires an `Idempotency-Key` UUID. The user/key pair is unique, and the database stores a SHA-256 hash plus the first HTTP response code and exact serialized body. A new successful request returns 201 Created. Same-key/same-body retries replay that result; a retry while the key is processing returns 409; reusing the key with a different body returns 422. Deterministic business failures are saved too, so retrying an insufficient-funds request does not later perform a transfer under the same key. Processing claims use a fencing token and a one-minute lease so an abandoned claim can be recovered without allowing an old worker to move money afterward.
+
+Run the idempotency acceptance scenarios against a running stack:
+
+```sh
+npm run acceptance:idempotency
+```
+
+This checks missing/malformed keys, five sequential retries with byte-identical response bodies, ten simultaneous retries, an in-flight 409, and amount mismatch without duplicate ledger entries.
+
 ## Concurrency acceptance check
 
 After the Compose services are healthy, run the 20-trial stampede test from the host:

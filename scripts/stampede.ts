@@ -24,13 +24,13 @@ async function main(): Promise<void> {
     const responses = await Promise.all(Array.from({ length: 100 }, async (_, i) => {
       const response = await fetch(`${api}/transfers`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json', 'idempotency-key': `stampede-${trial}-${i}` },
+        headers: { 'content-type': 'application/json', 'idempotency-key': randomUUID() },
         body: JSON.stringify({ user_id: userId, source_account_id: sourceId,
           destination_account_id: destinationId, amount_paise: 1000 }),
       });
       return { status: response.status, body: await response.json() as { transfer_id?: string } };
     }));
-    const succeeded = responses.filter((r) => r.status === 200);
+    const succeeded = responses.filter((r) => r.status === 201);
     const rejected = responses.filter((r) => r.status === 409);
     if (succeeded.length !== 50 || rejected.length !== 50) {
       throw new Error(`run ${trial}: ${succeeded.length} succeeded, ${rejected.length} rejected`);

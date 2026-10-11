@@ -26,7 +26,7 @@ All tables have a generated `BIGINT` primary key named `id`.
 - `accounts`: nullable `owner_user_id`, `kind`, `name`, `currency`, cached `balance_paise`, `created_at`. Wallet rows require an owner; system account rows forbid one. Wallet balances are constrained nonnegative.
 - `transfers`: `type`, `status`, positive `amount_paise`, `created_at`, optional `reversal_of_transfer_id`.
 - `ledger_entries`: `transfer_id`, `account_id`, `direction`, positive `amount_paise`, `created_at`. Direction is separate from amount so stored values remain positive and easy to validate.
-- `idempotency_keys`: `user_id`, `idempotency_key`, SHA-256 `request_hash`, nullable `response_body` and `transfer_id`, `created_at`.
+- `idempotency_keys`: `user_id`, UUID `idempotency_key`, SHA-256 `request_hash`, `status`, saved `response_code` and exact serialized `response_body`, nullable `transfer_id`, `processing_token` and `processing_since` while processing, `created_at`.
 - `fraud_rules`: `name`, `description`, `disposition`, `enabled`, `created_at`.
 - `fraud_reviews`: `transfer_id`, `fraud_rule_id`, review `status`, flag/review timestamps, optional reviewer and note.
 - `transfer_status_audit_logs`: `transfer_id`, old/new status, actor kind and optional user, `changed_at`.
