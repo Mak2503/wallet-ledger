@@ -1,0 +1,22 @@
+{
+  "name": "wallet-ledger",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build": "tsc",
+    "start": "node --env-file-if-exists=.env dist/app/main.js",
+    "stampede": "node --env-file-if-exists=.env dist/scripts/stampede.js",
+    "broken-transfer": "node --env-file-if-exists=.env dist/scripts/broken_transfer.js",
+    "reset-db": "node --env-file-if-exists=.env dist/scripts/reset_db.js",
+    "migrate": "node --env-file-if-exists=.env dist/scripts/migrate.js"
+  },
+  "dependencies": {
+    "fastify": "^5.2.1",
+    "pg": "^8.13.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.4",
+    "@types/pg": "^8.11.11",
+    "typescript": "^5.7.3"
+  }
+}

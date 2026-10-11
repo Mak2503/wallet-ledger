@@ -5,15 +5,13 @@
 .env
 .env.*
 !.env.example
+secrets/*
+!secrets/.gitkeep
 
-# Python
-__pycache__/
-*.py[cod]
-.venv/
-venv/
-
-# Node.js
+# TypeScript / Node.js
 node_modules/
+dist/
+npm-debug.log*
 
 # Java / Gradle
 build/

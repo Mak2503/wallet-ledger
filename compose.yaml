@@ -1,0 +1,97 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: wallet
+      POSTGRES_USER: wallet_admin
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - postgres_password
+      - app_db_password
+    ports:
+      # Loopback only. Remove this mapping in a deployment where the DB is not
+      # managed from the host; API and migrations reach it over the private network.
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-5433}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wallet_admin -d wallet"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    volumes:
+      # Separate the hardened stack from the previous development volume so
+      # old superuser credentials cannot be silently reused.
+      - pgdata_prod:/var/lib/postgresql/data
+      - ./db-init/001-create-app-role.sh:/docker-entrypoint-initdb.d/001-create-app-role.sh:ro
+    networks: [backend]
+    stop_grace_period: 1m
+
+  migrate:
+    build: .
+    image: wallet-ledger:local
+    command: ["node", "dist/scripts/migrate.js"]
+    restart: "no"
+    environment:
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: wallet
+      DB_USER: wallet_admin
+      DB_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets: [postgres_password]
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [backend]
+
+  api:
+    image: wallet-ledger:local
+    restart: unless-stopped
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,noexec,nosuid
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 200
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 8000
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: wallet
+      DB_USER: wallet_app
+      DB_PASSWORD_FILE: /run/secrets/app_db_password
+    secrets: [app_db_password]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    ports:
+      # Bind behind a local reverse proxy. Set API_HOST_BIND deliberately when
+      # direct external access is required and TLS is terminated elsewhere.
+      - "${API_HOST_BIND:-127.0.0.1}:${API_HOST_PORT:-8000}:8000"
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:8000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    networks: [backend]
+
+networks:
+  backend:
+    driver: bridge
+
+volumes:
+  pgdata_prod:
+
+secrets:
+  postgres_password:
+    file: ./secrets/postgres_password
+  app_db_password:
+    file: ./secrets/app_db_password
