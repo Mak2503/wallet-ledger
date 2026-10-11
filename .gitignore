@@ -1,0 +1,26 @@
+# macOS
+.DS_Store
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Node.js
+node_modules/
+
+# Java / Gradle
+build/
+target/
+.gradle/
+
+# Editor and IDE files
+.idea/
+.vscode/
+*.swp
