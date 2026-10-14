@@ -38,6 +38,20 @@ The server follows MVC with a service layer: `app/routes/` maps URLs to controll
 
 Every `POST /transfers` requires an `Idempotency-Key` UUID. The user/key pair is unique, and the database stores a SHA-256 hash plus the first HTTP response code and exact serialized body. A new successful request returns 201 Created. Same-key/same-body retries replay that result; a retry while the key is processing returns 409; reusing the key with a different body returns 422. Deterministic business failures are saved too, so retrying an insufficient-funds request does not later perform a transfer under the same key. Processing claims use a fencing token and a one-minute lease so an abandoned claim can be recovered without allowing an old worker to move money afterward.
 
+## Nightly reconciliation
+
+The API schedules a reconciliation run for 02:00 UTC every day. `POST /admin/reconciliation/run` starts one manually and returns 409 if the database lock is held by another run. Each run locks the `nightly_reconciliation` row in `job_locks` with `FOR UPDATE NOWAIT`, then performs all checks and persists the report in one `REPEATABLE READ` transaction. It only records discrepancies; it never changes ledger entries or account balances. Report metadata is in `reconciliation_reports` and one row per finding is stored in `reconciliation_mismatches` with its check, subject ID, expected value, and actual value.
+
+The million-row `EXPLAIN ANALYZE` run used a parallel sequential scan for global totals, an index scan on `ledger_transfer_idx` for per-transfer totals, and an index-only probe on that same index for transfers without entries. Cached-balance and overdraft aggregation, plus finding entries without a transfer, used full ledger scans; those scans are acceptable nightly and an account index does not help when aggregating every account. The orphan-entry check scans the ledger and probes the transfer primary key. These checks read the full history to prove the books, so indexes help the per-transfer and anti-join lookups without eliminating all scans.
+
+The corruption acceptance scenario inserts 10,000 transfers and intentionally updates/deletes ledger rows. It requires the admin database credentials from `.env`, access to the local API, and is guarded because it uses replication-role trigger bypass while preparing test corruption:
+
+```sh
+RECONCILIATION_ACCEPTANCE=1 npm run acceptance:reconciliation
+```
+
+Run `RECONCILIATION_EXPLAIN_SEED=1 npm run reconciliation:explain` to temporarily insert one million synthetic ledger entries when needed, execute `EXPLAIN ANALYZE` for each reconciliation query, print the plans and buffer statistics, and remove the benchmark rows. This uses the admin database credentials from `.env` and bypasses ledger triggers only for the temporary fixture.
+
 Run the idempotency acceptance scenarios against a running stack:
 
 ```sh

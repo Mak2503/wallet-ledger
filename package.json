@@ -8,6 +8,8 @@
     "stampede": "node --env-file-if-exists=.env dist/scripts/stampede.js",
     "broken-transfer": "node --env-file-if-exists=.env dist/scripts/broken_transfer.js",
     "acceptance:idempotency": "node --env-file-if-exists=.env dist/scripts/idempotency_acceptance.js",
+    "acceptance:reconciliation": "node --env-file-if-exists=.env dist/scripts/reconciliation_acceptance.js",
+    "reconciliation:explain": "node --env-file-if-exists=.env dist/scripts/reconciliation_explain.js",
     "reset-db": "node --env-file-if-exists=.env dist/scripts/reset_db.js",
     "migrate": "node --env-file-if-exists=.env dist/scripts/migrate.js"
   },
