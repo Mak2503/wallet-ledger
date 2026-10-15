@@ -9,6 +9,8 @@
     "broken-transfer": "node --env-file-if-exists=.env dist/scripts/broken_transfer.js",
     "acceptance:idempotency": "node --env-file-if-exists=.env dist/scripts/idempotency_acceptance.js",
     "acceptance:reconciliation": "node --env-file-if-exists=.env dist/scripts/reconciliation_acceptance.js",
+    "acceptance:risk-rules": "node --env-file-if-exists=.env dist/scripts/risk_rules_acceptance.js",
+    "acceptance:statement-qa": "node --env-file-if-exists=.env dist/scripts/statement_qa_acceptance.js",
     "reconciliation:explain": "node --env-file-if-exists=.env dist/scripts/reconciliation_explain.js",
     "reset-db": "node --env-file-if-exists=.env dist/scripts/reset_db.js",
     "migrate": "node --env-file-if-exists=.env dist/scripts/migrate.js"

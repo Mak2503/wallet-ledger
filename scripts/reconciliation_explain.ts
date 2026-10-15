@@ -57,6 +57,9 @@ async function main() {
   let temporaryUserId: string | undefined;
   let temporaryAccountIds: string[] = [];
   let temporaryTransferId: string | undefined;
+  let paginationUserId: string | undefined;
+  let paginationAccountId: string | undefined;
+  let paginationTransferId: string | undefined;
   let seeded = false;
   try {
     const count = await client.query<{ count: string }>('SELECT count(*)::text AS count FROM ledger_entries');
@@ -94,13 +97,68 @@ async function main() {
       const plan = await client.query(`EXPLAIN (ANALYZE, BUFFERS, FORMAT TEXT) ${check.sql}`);
       console.log(`\n${check.name}\n${plan.rows.map((row) => row['QUERY PLAN']).join('\n')}`);
     }
+    // Ensure there is a deep wallet page even when the main million-row fixture already existed.
+    const paginationTag = randomUUID();
+    const paginationUser = await client.query<{ id: string }>(
+      `INSERT INTO users(name,email,phone) VALUES('pagination explain',$1,$2) RETURNING id::text`,
+      [`pagination-${paginationTag}@example.test`, `+91${Date.now().toString().slice(-10)}`],
+    );
+    paginationUserId = paginationUser.rows[0].id;
+    const paginationAccount = await client.query<{ id: string }>(
+      `INSERT INTO accounts(owner_user_id,kind,name) VALUES($1,'wallet','pagination explain') RETURNING id::text`,
+      [paginationUserId],
+    );
+    paginationAccountId = paginationAccount.rows[0].id;
+    await client.query('SET session_replication_role = replica');
+    const paginationTransfer = await client.query<{ id: string }>(
+      `INSERT INTO transfers(type,status,amount_paise,source_account_id) VALUES('peer_transfer','pending',200001,$1) RETURNING id::text`,
+      [paginationAccountId],
+    );
+    paginationTransferId = paginationTransfer.rows[0].id;
+    await client.query(
+      `INSERT INTO ledger_entries(transfer_id,account_id,direction,amount_paise)
+       SELECT $1,$2,'debit'::entry_direction,1 FROM generate_series(1,200001)`,
+      [paginationTransferId, paginationAccountId],
+    );
+    await client.query('SET session_replication_role = origin');
+    const statementAccount = await client.query<{ account_id: string; count: string }>(
+      `SELECT account_id::text,count(*)::text AS count FROM ledger_entries GROUP BY account_id
+        HAVING count(*) > 100020 ORDER BY count(*) DESC LIMIT 1`,
+    );
+    if (statementAccount.rowCount) {
+      const accountId = statementAccount.rows[0].account_id;
+      const boundary = await client.query<{ created_at: string; id: string }>(
+        `SELECT created_at::text AS created_at,id::text FROM ledger_entries WHERE account_id=$1
+          ORDER BY created_at DESC,id DESC OFFSET 100000 LIMIT 1`, [accountId],
+      );
+      const offsetPlan = await client.query(
+        `EXPLAIN (ANALYZE, BUFFERS, FORMAT TEXT)
+         SELECT id,created_at FROM ledger_entries WHERE account_id=$1
+          ORDER BY created_at DESC,id DESC LIMIT 20 OFFSET 100000`, [accountId],
+      );
+      console.log(`\nstatement OFFSET 100000\n${offsetPlan.rows.map((row) => row['QUERY PLAN']).join('\n')}`);
+      const cursorPlan = await client.query(
+        `EXPLAIN (ANALYZE, BUFFERS, FORMAT TEXT)
+         SELECT id,created_at FROM ledger_entries WHERE account_id=$1 AND (created_at,id)<($2::timestamptz,$3::bigint)
+          ORDER BY created_at DESC,id DESC LIMIT 20`, [accountId, boundary.rows[0].created_at, boundary.rows[0].id],
+      );
+      console.log(`\nstatement cursor after 100000 rows\n${cursorPlan.rows.map((row) => row['QUERY PLAN']).join('\n')}`);
+    } else {
+      console.log('\nstatement pagination comparison skipped: no account has more than 100,000 ledger entries.');
+    }
   } finally {
-    if (seeded || temporaryUserId || temporaryAccountIds.length || temporaryTransferId) {
+    if (seeded || temporaryUserId || temporaryAccountIds.length || temporaryTransferId || paginationUserId) {
       await client.query('SET session_replication_role = replica').catch(() => undefined);
       if (temporaryTransferId) {
         await client.query('DELETE FROM ledger_entries WHERE transfer_id=$1', [temporaryTransferId]).catch(() => undefined);
         await client.query('DELETE FROM transfers WHERE id=$1', [temporaryTransferId]).catch(() => undefined);
       }
+      if (paginationTransferId) {
+        await client.query('DELETE FROM ledger_entries WHERE transfer_id=$1', [paginationTransferId]).catch(() => undefined);
+        await client.query('DELETE FROM transfers WHERE id=$1', [paginationTransferId]).catch(() => undefined);
+      }
+      if (paginationAccountId) await client.query('DELETE FROM accounts WHERE id=$1', [paginationAccountId]).catch(() => undefined);
+      if (paginationUserId) await client.query('DELETE FROM users WHERE id=$1', [paginationUserId]).catch(() => undefined);
       if (temporaryAccountIds.length) await client.query('DELETE FROM accounts WHERE id=ANY($1::bigint[])', [temporaryAccountIds]).catch(() => undefined);
       if (temporaryUserId) await client.query('DELETE FROM users WHERE id=$1', [temporaryUserId]).catch(() => undefined);
       await client.query('SET session_replication_role = origin').catch(() => undefined);

@@ -97,7 +97,7 @@ async function main(): Promise<void> {
   assert.equal(parallelCreated.length + parallelBusy.length, 10);
   for (const result of parallelCreated) assert.equal(result.rawBody, parallelCreated[0].rawBody);
   for (const result of parallelBusy) {
-    assert.match(String(result.body.error), /still processing/);
+    assert.match(String(result.body.message), /still processing/);
     assert.equal(result.retryAfter, '1');
   }
   assert.equal(await transferCount(parallel.sourceId), 1);

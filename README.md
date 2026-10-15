@@ -36,6 +36,55 @@ The transfer service runs at PostgreSQL `READ COMMITTED`. It commits a processin
 
 The server follows MVC with a service layer: `app/routes/` maps URLs to controllers, `app/controllers/` validates HTTP input, `app/services/` coordinates transfer and idempotency workflows, `app/models/` owns database queries, `app/views/` formats HTTP responses, and `app/types/` holds shared interfaces. `app/main.ts` only configures Fastify, health checks, route registration, and shutdown.
 
+## Wallet, risk, and statement API
+
+All `POST` endpoints require an `Idempotency-Key` UUID. The application stores the request hash and exact result in `api_idempotency_keys`; a matching retry replays the original body, while reuse with a different body returns 422. Errors use `{"code":"...","message":"...","request_id":"..."}`.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| POST | `/users` | Create a user |
+| POST | `/users/{id}/wallets` | Open a wallet |
+| GET | `/wallets/{id}/balance` | Read the cached balance |
+| GET | `/wallets/{id}/statement` | Read newest-first ledger entries |
+| POST | `/transfers/topup` | Cash-in to a wallet |
+| POST | `/transfers` | Wallet-to-wallet transfer |
+| POST | `/transfers/withdraw` | Cash-out from a wallet |
+| POST | `/transfers/{id}/reverse` | Create a linked reversal |
+| GET | `/transfers/{id}` | Read transfer, entries, and status history |
+| POST | `/admin/reconciliation/run` | Start a reconciliation run (202) |
+| GET | `/admin/reconciliation/runs/{id}` | Read a run report |
+| GET | `/admin/risk/queue` | List held transfers and unreviewed flags |
+| POST | `/admin/risk/{transfer_id}/decision` | Release or reverse a risk-held transfer |
+| POST | `/users/{id}/statement/ask` | Ask a supported statement question in plain English |
+
+All transfer amounts are positive integer paise. Reversals create a new transfer with equal and opposite ledger entries; they do not erase the original. The current API takes user IDs from request paths/bodies and has no authentication; keep it local until authorization is added.
+
+### Fraud rules and measurement
+
+The enabled rules and their thresholds are rows in `risk_rules`, seeded by migration 008:
+
+| Rule | Decision | Query/index support |
+| --- | --- | --- |
+| More than 5 outgoing transfers from a wallet in 10 minutes | Hold | `transfers_source_created_idx` supports wallet/time lookup; legacy rows use `ledger_account_direction_created_idx` |
+| Amount greater than 5 times the wallet's 30-day average outgoing transfer amount | Hold | Same source/time index, plus `ledger_account_direction_created_idx` for legacy ledger-only source discovery |
+| First transfer to this payee above ₹10,000 (1,000,000 paise) | Allow and flag | `transfers_source_created_idx` and `transfers_destination_created_idx`; legacy relationship lookup uses `ledger_account_transfer_idx` |
+
+Risk rules execute within the transfer's database transaction before any balance or ledger write. Held transfers are stored with no ledger entries and can be released by an admin after locking both accounts in ascending ID order and checking funds again. A new-payee flag permits the transfer and adds it to the review queue. `transfer_service` measures each enabled rule with `performance.now()` and logs its elapsed milliseconds as `rule_key` and `elapsed_ms`; run `RISK_RULES_ACCEPTANCE=1 npm run acceptance:risk-rules` to print the per-rule timings on the local database. Across the measured runs, warmed executions took 0.60–2.45 ms for velocity, 0.50–1.23 ms for amount spike, and 0.39–0.82 ms for new payee. The first velocity lookup took 7.55–10.49 ms while loading data. These are per-rule query times, not total request overhead; workload and cache affect them.
+
+The nightly reconciliation scheduler also asks the configured LLM to explain outstanding risk flags. It sends the fired rule and the wallet's last 10 transfers as JSON, treats note text as untrusted data, and saves a two-sentence explanation plus `likely_ok`, `review`, or `likely_fraud` in `risk_flags`. Rules determine the action; the model's label is explanatory only. Set `LLM_ENDPOINT`, `LLM_API_KEY`, and optionally `LLM_MODEL` for a JSON endpoint that accepts `{model, system_prompt, input, response_format: "json"}` and returns an `output` value or JSON string in `content`. With no endpoint configured, the mock provider makes a deterministic review explanation so local runs need no key. `LlmJsonProvider` is the provider boundary; `MockLlmProvider` supplies fixed JSON in tests.
+
+Statement Q&A accepts `POST /users/{id}/statement/ask` with a `question`. The provider returns JSON containing a supported type (sent-to-person total, received total, largest transfer, or transfer count) and date range. The service validates it and runs its own parameterized SQL scoped to accounts owned by that user; model output is never SQL. Responses contain paise as a decimal string and the transfer IDs used. Notes are not supplied to the question parser. The acceptance script checks 10 sample questions and an injection phrase in a note, and confirms unrelated users' transfers remain excluded:
+
+```sh
+npm run acceptance:statement-qa
+```
+
+### Statement pagination
+
+`GET /wallets/{id}/statement?limit=20&offset=0` orders by `created_at DESC, id DESC`; it also returns `next_cursor`. Pass that cursor on the next request to use keyset pagination on `(created_at,id)`. Offset remains available for direct page access.
+
+Run `RECONCILIATION_EXPLAIN_SEED=1 npm run reconciliation:explain` to print `EXPLAIN ANALYZE` for OFFSET 100000 and its cursor equivalent after creating temporary ledger fixtures. On the local 1M-entry ledger, OFFSET scanned 100,020 index entries and took 36.3 ms (2,758 shared buffers); the cursor read 20 entries in 0.24 ms (5 buffers). OFFSET must walk past the first 100,000 matching index entries before returning a page, so its work grows with page depth. The cursor predicate seeks from the last `(created_at,id)` pair and reads roughly the requested page, so it stays efficient at deep positions. Both use `ledger_account_statement_idx`. The API carries the timestamp as PostgreSQL text to preserve microseconds in the cursor.
+
 Every `POST /transfers` requires an `Idempotency-Key` UUID. The user/key pair is unique, and the database stores a SHA-256 hash plus the first HTTP response code and exact serialized body. A new successful request returns 201 Created. Same-key/same-body retries replay that result; a retry while the key is processing returns 409; reusing the key with a different body returns 422. Deterministic business failures are saved too, so retrying an insufficient-funds request does not later perform a transfer under the same key. Processing claims use a fencing token and a one-minute lease so an abandoned claim can be recovered without allowing an old worker to move money afterward.
 
 ## Nightly reconciliation

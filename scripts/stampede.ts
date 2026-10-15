@@ -6,7 +6,10 @@ const db = new Pool(databaseConfig());
 const api = process.env.API_URL ?? 'http://localhost:8000';
 
 async function main(): Promise<void> {
-  for (let trial = 1; trial <= 20; trial++) {
+  const riskRuleStates = await db.query<{ id: string; enabled: boolean }>('SELECT id::text,enabled FROM risk_rules');
+  await db.query('UPDATE risk_rules SET enabled=false');
+  try {
+    for (let trial = 1; trial <= 20; trial++) {
     const suffix = randomUUID().replaceAll('-', '');
     const user = await db.query<{ id: string }>(
       `INSERT INTO users(name,email,phone,kyc_status) VALUES($1,$2,$3,'verified') RETURNING id`,
@@ -49,8 +52,11 @@ async function main(): Promise<void> {
       throw new Error(`run ${trial}: invalid balances or ledger totals`);
     }
     console.log(`run ${String(trial).padStart(2, '0')}/20: 50 succeeded, 50 rejected, source=0, debits=credits=50000 paise`);
+    }
+    console.log('PASS: all 20 stampede runs');
+  } finally {
+    for (const rule of riskRuleStates.rows) await db.query('UPDATE risk_rules SET enabled=$1 WHERE id=$2', [rule.enabled, rule.id]);
   }
-  console.log('PASS: all 20 stampede runs');
 }
 
 main().catch((error: unknown) => {

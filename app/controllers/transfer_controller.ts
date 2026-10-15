@@ -6,7 +6,7 @@ import { TransferRoute, DatabaseError } from '../types/http';
 import { sendJson } from '../views/json_response';
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const fields = ['user_id', 'source_account_id', 'destination_account_id', 'amount_paise'];
+const fields = ['user_id', 'source_account_id', 'destination_account_id', 'amount_paise', 'note'];
 
 function isTransferRequest(body: unknown): body is TransferRequest {
   if (typeof body !== 'object' || body === null || Array.isArray(body)) return false;
@@ -14,7 +14,8 @@ function isTransferRequest(body: unknown): body is TransferRequest {
   return Number.isSafeInteger(value.user_id) && Number(value.user_id) > 0 &&
     Number.isSafeInteger(value.source_account_id) && Number(value.source_account_id) > 0 &&
     Number.isSafeInteger(value.destination_account_id) && Number(value.destination_account_id) > 0 &&
-    Number.isSafeInteger(value.amount_paise) && Number(value.amount_paise) > 0;
+    Number.isSafeInteger(value.amount_paise) && Number(value.amount_paise) > 0 &&
+    (value.note === undefined || (typeof value.note === 'string' && value.note.length <= 500));
 }
 
 export async function createTransferController(
@@ -32,7 +33,7 @@ export async function createTransferController(
     return sendJson(reply, jsonResult(400, { error: 'source and destination must differ' }));
   }
   try {
-    return sendJson(reply, await executeTransfer(body, key.toLowerCase()));
+    return sendJson(reply, await executeTransfer(body, key.toLowerCase(), request.log));
   } catch (error) {
     request.log.error(error);
     if ((error as DatabaseError).code === '55P03') {

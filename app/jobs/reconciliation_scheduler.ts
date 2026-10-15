@@ -1,5 +1,6 @@
 import { FastifyBaseLogger } from 'fastify';
 import { runReconciliation } from '../services/reconciliation_service';
+import { explainPreviousDayRiskFlags } from '../services/risk_explanation_service';
 
 const RUN_HOUR_UTC = 2;
 
@@ -19,6 +20,10 @@ export function startReconciliationScheduler(logger: FastifyBaseLogger): () => v
       try {
         const result = await runReconciliation();
         logger.info({ result }, 'scheduled reconciliation finished');
+        if (result.status === 'completed') {
+          const explained = await explainPreviousDayRiskFlags();
+          logger.info({ explained }, 'risk flags explained');
+        }
       } catch (error) {
         logger.error(error, 'scheduled reconciliation failed');
       }

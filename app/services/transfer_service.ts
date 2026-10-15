@@ -3,18 +3,21 @@ import { withTransaction } from '../database';
 import * as accounts from '../models/account_model';
 import * as idempotency from '../models/idempotency_model';
 import * as transferModel from '../models/transfer_model';
+import * as riskModel from '../models/risk_model';
 import { jsonResult, processingResult } from '../models/transfer';
 import { Claim } from '../types/idempotency';
 import { HttpResult, TransferRequest } from '../types/transfer';
 import { ClaimOutcome } from '../types/transfer_service';
 import { DatabaseError } from '../types/http';
+import { FastifyBaseLogger } from 'fastify';
 
-export async function executeTransfer(body: TransferRequest, key: string): Promise<HttpResult> {
+export async function executeTransfer(body: TransferRequest, key: string, logger?: FastifyBaseLogger): Promise<HttpResult> {
   const requestBody = {
     amount_paise: body.amount_paise,
     destination_account_id: body.destination_account_id,
     source_account_id: body.source_account_id,
     user_id: body.user_id,
+    ...(body.note === undefined ? {} : { note: body.note }),
   };
   const requestHash = createHash('sha256').update(JSON.stringify(requestBody)).digest();
   let activeClaim: Claim | null = null;
@@ -76,13 +79,29 @@ export async function executeTransfer(body: TransferRequest, key: string): Promi
         } else if (BigInt(source.balance_paise) < BigInt(body.amount_paise)) {
           response = jsonResult(409, { error: 'insufficient funds' });
         } else {
-          transferId = (await transferModel.createTransfer(client, body.amount_paise)).rows[0].id;
+          const firedRules = await riskModel.evaluateRiskRules(client, body, (ruleKey, elapsedMs, fired) => {
+            logger?.info({ rule_key: ruleKey, elapsed_ms: Number(elapsedMs.toFixed(3)), fired }, 'risk rule evaluated');
+          });
+          const held = firedRules.some((rule) => rule.action === 'hold');
+          transferId = (await transferModel.createTransfer(client, body)).rows[0].id;
+          const reviews = await riskModel.addFraudReviews(client, transferId, firedRules);
           await client.query("SELECT set_config('wallet.actor_user_id',$1,true)", [String(body.user_id)]);
-          await transferModel.succeedTransfer(client, transferId);
-          await accounts.debit(client, body.source_account_id, body.amount_paise);
-          await accounts.credit(client, body.destination_account_id, body.amount_paise);
-          await transferModel.addTransferEntries(client, transferId, body.source_account_id, body.destination_account_id, body.amount_paise);
-          response = jsonResult(201, { transfer_id: transferId, status: 'succeeded', amount_paise: body.amount_paise });
+          if (held) {
+            await transferModel.holdTransfer(client, transferId);
+            response = jsonResult(202, {
+              transfer_id: transferId, status: 'held', amount_paise: body.amount_paise,
+              flagged_rules: reviews.map(({ rule }) => rule.rule_key),
+            });
+          } else {
+            await transferModel.succeedTransfer(client, transferId);
+            await accounts.debit(client, body.source_account_id, body.amount_paise);
+            await accounts.credit(client, body.destination_account_id, body.amount_paise);
+            await transferModel.addTransferEntries(client, transferId, body.source_account_id, body.destination_account_id, body.amount_paise);
+            response = jsonResult(201, {
+              transfer_id: transferId, status: 'succeeded', amount_paise: body.amount_paise,
+              ...(reviews.length ? { flagged_rules: reviews.map(({ rule }) => rule.rule_key) } : {}),
+            });
+          }
         }
       }
       await idempotency.completeClaim(client, activeClaim!.id, activeClaim!.token, response.statusCode, response.serializedBody, transferId);
@@ -96,7 +115,7 @@ export async function executeTransfer(body: TransferRequest, key: string): Promi
       try {
         await withTransaction((client) => idempotency.failClaim(
           client, activeClaim!.id, activeClaim!.token,
-          JSON.stringify({ error: 'transfer failed; transaction rolled back' }),
+          jsonResult(500, { error: 'transfer failed; transaction rolled back' }).serializedBody,
         ));
       } catch (finalizeError) {
         throw new AggregateError([error, finalizeError], 'Transfer failed and its idempotency claim could not be finalized');
