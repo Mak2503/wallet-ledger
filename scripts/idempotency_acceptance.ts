@@ -7,6 +7,7 @@ const db = new Pool(databaseConfig());
 const api = process.env.API_URL ?? 'http://localhost:8000';
 
 function assertLocalTargets(): void {
+  if (process.env.ACCEPTANCE_ALLOW_NONLOCAL === '1') return;
   const allowedHosts = new Set(['localhost', '127.0.0.1', '::1']);
   const dbUrl = process.env.DATABASE_URL;
   const dbHost = dbUrl ? new URL(dbUrl).hostname : (process.env.DB_HOST ?? 'localhost');

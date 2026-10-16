@@ -110,7 +110,10 @@ async function main() {
     await client.query('UPDATE accounts SET balance_paise=balance_paise+50 WHERE id=$1', [accountIds[4]]);
     await client.query('SET session_replication_role = origin');
 
-    const response = await fetch(`${apiUrl}/admin/reconciliation/run`, { method: 'POST' });
+    const response = await fetch(`${apiUrl}/admin/reconciliation/run`, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': randomUUID() },
+    });
     const result = await response.json() as { status: string; runId?: string; findingCount?: number };
     if (result.runId) reportId = result.runId;
     if (!response.ok || result.status !== 'completed' || result.findingCount !== 3 || !result.runId) {

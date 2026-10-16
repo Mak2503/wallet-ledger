@@ -1,6 +1,10 @@
-import { FastifyBaseLogger } from 'fastify';
 import { runReconciliation } from '../services/reconciliation_service';
 import { explainPreviousDayRiskFlags } from '../services/risk_explanation_service';
+
+export interface SchedulerLogger {
+  info(fields: unknown, message: string): void;
+  error(error: unknown, message: string): void;
+}
 
 const RUN_HOUR_UTC = 2;
 
@@ -11,7 +15,7 @@ function millisecondsUntilNextRun(now: Date): number {
   return next.getTime() - now.getTime();
 }
 
-export function startReconciliationScheduler(logger: FastifyBaseLogger): () => void {
+export function startReconciliationScheduler(logger: SchedulerLogger): () => void {
   let timer: NodeJS.Timeout;
   let stopped = false;
   const schedule = (): void => {
@@ -29,7 +33,6 @@ export function startReconciliationScheduler(logger: FastifyBaseLogger): () => v
       }
       schedule();
     }, millisecondsUntilNextRun(new Date()));
-    timer.unref();
   };
   schedule();
   return () => {

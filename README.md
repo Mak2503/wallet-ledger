@@ -4,7 +4,17 @@ A PostgreSQL-backed wallet API with a production-oriented Docker Compose baselin
 
 ## Start locally
 
-Create two random local secret files and your ignored environment file:
+To reproduce the complete submission from a clone, with isolated generated secrets, an empty database, the demo dataset, and every acceptance check, run this one command (requires Docker Compose, Node.js 22+, npm, and OpenSSL):
+
+```sh
+npm run verify
+```
+
+It builds the containers, applies migrations from an empty PostgreSQL volume, starts Postgres, API, and the separate worker, seeds 1,000 users / 2,000 wallets / 100,000 balanced transfers, and runs the stampede, idempotency, reconciliation, risk, and statement prompt-injection acceptance scripts. It then removes only its uniquely named Compose project and database volume. CI runs the same command in [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
+
+The standalone additive demo seed is also available as `npm run seed:demo` after setting up `.env` and applying migrations. Each invocation creates another uniquely identified batch; it does not clear existing rows.
+
+For a persistent local development stack, create two random local secret files and your ignored environment file:
 
 ```sh
 mkdir -p secrets
@@ -14,7 +24,7 @@ cp .env.example .env
 docker compose up --build -d
 ```
 
-The database listens on the Docker network. A loopback-only host port (`5433`) is available for local scripts and maintenance. The API is similarly bound to `127.0.0.1:8000` by default. Copy `.env.example` to `.env` for host-side scripts; the example already points to the local secret files. The API role password is distinct from the PostgreSQL administrator password.
+The database listens on the Docker network. A loopback-only host port (`5433`) is available for local scripts and maintenance. The API is similarly bound to `127.0.0.1:8000` by default. Copy `.env.example` to `.env` for host-side scripts; the example already points to the local secret files. The API role password is distinct from the PostgreSQL administrator password. `docker compose up --build -d` starts the `db`, `migrate`, `api`, and `worker` services.
 
 This stack uses a new `pgdata_prod` volume so it cannot silently reuse the previous development volume and its old credentials. Existing development data is left untouched and is not copied into the new volume. Back up and migrate data deliberately before switching an existing installation.
 
@@ -69,9 +79,9 @@ The enabled rules and their thresholds are rows in `risk_rules`, seeded by migra
 | Amount greater than 5 times the wallet's 30-day average outgoing transfer amount | Hold | Same source/time index, plus `ledger_account_direction_created_idx` for legacy ledger-only source discovery |
 | First transfer to this payee above ₹10,000 (1,000,000 paise) | Allow and flag | `transfers_source_created_idx` and `transfers_destination_created_idx`; legacy relationship lookup uses `ledger_account_transfer_idx` |
 
-Risk rules execute within the transfer's database transaction before any balance or ledger write. Held transfers are stored with no ledger entries and can be released by an admin after locking both accounts in ascending ID order and checking funds again. A new-payee flag permits the transfer and adds it to the review queue. `transfer_service` measures each enabled rule with `performance.now()` and logs its elapsed milliseconds as `rule_key` and `elapsed_ms`; run `RISK_RULES_ACCEPTANCE=1 npm run acceptance:risk-rules` to print the per-rule timings on the local database. Across the measured runs, warmed executions took 0.60–2.45 ms for velocity, 0.50–1.23 ms for amount spike, and 0.39–0.82 ms for new payee. The first velocity lookup took 7.55–10.49 ms while loading data. These are per-rule query times, not total request overhead; workload and cache affect them.
+Risk rules execute within the transfer's database transaction before any balance or ledger write. Held transfers are stored with no ledger entries and can be released by an admin after locking both accounts in ascending ID order and checking funds again. A new-payee flag permits the transfer and adds it to the review queue. `transfer_service` measures each enabled rule with `performance.now()` and logs its elapsed milliseconds as `rule_key` and `elapsed_ms`; run `RISK_RULES_ACCEPTANCE=1 npm run acceptance:risk-rules` to print the per-rule timings on the local database. On a small local fixture, warmed queries ranged from 0.60–2.45 ms for velocity, 0.50–1.23 ms for amount spike, and 0.39–0.82 ms for new payee. In the full seeded verification run (100,000 transfers), the three calls measured 18–32 ms, 15–17 ms, and 0.3–150 ms respectively; the last reading was a single outlier. These are per-rule query times, not total request overhead, and vary with data distribution, cache, and load.
 
-The nightly reconciliation scheduler also asks the configured LLM to explain outstanding risk flags. It sends the fired rule and the wallet's last 10 transfers as JSON, treats note text as untrusted data, and saves a two-sentence explanation plus `likely_ok`, `review`, or `likely_fraud` in `risk_flags`. Rules determine the action; the model's label is explanatory only. Set `LLM_ENDPOINT`, `LLM_API_KEY`, and optionally `LLM_MODEL` for a JSON endpoint that accepts `{model, system_prompt, input, response_format: "json"}` and returns an `output` value or JSON string in `content`. With no endpoint configured, the mock provider makes a deterministic review explanation so local runs need no key. `LlmJsonProvider` is the provider boundary; `MockLlmProvider` supplies fixed JSON in tests.
+The separate `worker` service runs reconciliation daily at 02:00 UTC and then asks the configured LLM to explain outstanding risk flags. It sends the fired rule and the wallet's last 10 transfers as JSON, treats note text as untrusted data, and saves a two-sentence explanation plus `likely_ok`, `review`, or `likely_fraud` in `risk_flags`. Rules determine the action; the model's label is explanatory only. Set `LLM_ENDPOINT`, `LLM_API_KEY`, and optionally `LLM_MODEL` for a JSON endpoint that accepts `{model, system_prompt, input, response_format: "json"}` and returns an `output` value or JSON string in `content`. With no endpoint configured, the mock provider makes a deterministic review explanation so local runs need no key. `LlmJsonProvider` is the provider boundary; `MockLlmProvider` supplies fixed JSON in tests.
 
 Statement Q&A accepts `POST /users/{id}/statement/ask` with a `question`. The provider returns JSON containing a supported type (sent-to-person total, received total, largest transfer, or transfer count) and date range. The service validates it and runs its own parameterized SQL scoped to accounts owned by that user; model output is never SQL. Responses contain paise as a decimal string and the transfer IDs used. Notes are not supplied to the question parser. The acceptance script checks 10 sample questions and an injection phrase in a note, and confirms unrelated users' transfers remain excluded:
 
@@ -89,9 +99,9 @@ Every `POST /transfers` requires an `Idempotency-Key` UUID. The user/key pair is
 
 ## Nightly reconciliation
 
-The API schedules a reconciliation run for 02:00 UTC every day. `POST /admin/reconciliation/run` starts one manually and returns 409 if the database lock is held by another run. Each run locks the `nightly_reconciliation` row in `job_locks` with `FOR UPDATE NOWAIT`, then performs all checks and persists the report in one `REPEATABLE READ` transaction. It only records discrepancies; it never changes ledger entries or account balances. Report metadata is in `reconciliation_reports` and one row per finding is stored in `reconciliation_mismatches` with its check, subject ID, expected value, and actual value.
+The `worker` service schedules a reconciliation run for 02:00 UTC every day. `POST /admin/reconciliation/run` starts one manually and returns 409 if the database lock is held by another run. Each run locks the `nightly_reconciliation` row in `job_locks` with `FOR UPDATE NOWAIT`, then performs all checks and persists the report in one `REPEATABLE READ` transaction. It only records discrepancies; it never changes ledger entries or account balances. Report metadata is in `reconciliation_reports` and one row per finding is stored in `reconciliation_mismatches` with its check, subject ID, expected value, and actual value.
 
-The million-row `EXPLAIN ANALYZE` run used a parallel sequential scan for global totals, an index scan on `ledger_transfer_idx` for per-transfer totals, and an index-only probe on that same index for transfers without entries. Cached-balance and overdraft aggregation, plus finding entries without a transfer, used full ledger scans; those scans are acceptable nightly and an account index does not help when aggregating every account. The orphan-entry check scans the ledger and probes the transfer primary key. These checks read the full history to prove the books, so indexes help the per-transfer and anti-join lookups without eliminating all scans.
+The million-row `EXPLAIN ANALYZE` run used sequential scans for global totals and per-transfer aggregation, an index-only probe on `ledger_transfer_idx` for transfers without entries, and account index scans for cached-balance and overdraft aggregation. Finding entries without transfers scanned the ledger and probed the transfer primary key. Full-history scans are acceptable nightly; the transfer anti-join needs its index lookup, while summary totals cannot avoid reading all relevant ledger rows.
 
 The corruption acceptance scenario inserts 10,000 transfers and intentionally updates/deletes ledger rows. It requires the admin database credentials from `.env`, access to the local API, and is guarded because it uses replication-role trigger bypass while preparing test corruption:
 
@@ -141,3 +151,11 @@ The Compose file is a hardened container baseline, not a complete public payment
 - Wallets and system accounts share `accounts`, so every ledger entry has one account foreign key. `kind` and nullable owner distinguish the roles.
 - Email and phone can change or be recycled, so generated `users.id` is the stable primary key.
 - Amounts are whole paise and INR is the only currency. Client writes are idempotent per user.
+
+## What I would do next
+
+- Add authentication and authorization, then derive caller identity from verified credentials instead of request-supplied user IDs; protect all `/admin` routes with an administrator role.
+- Move database credentials into the deployment platform's secret manager, add TLS at the edge, managed backups, and restore drills before exposing the service outside a development network.
+- Add production observability for ledger/reconciliation drift, worker health, database saturation, and risk-rule latency; tune alert thresholds from observed traffic.
+- Add retention and privacy policies for notes, idempotency records, risk explanations, and audit data, plus reviewed retention jobs.
+- Replace the generic LLM HTTP adapter with a provider-specific adapter and contract tests for timeout, rate-limit, malformed-output, and data-minimization behavior.

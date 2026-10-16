@@ -83,6 +83,48 @@ services:
       start_period: 10s
     networks: [backend]
 
+  worker:
+    image: wallet-ledger:local
+    restart: unless-stopped
+    init: true
+    environment:
+      NODE_ENV: production
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: wallet
+      DB_USER: wallet_app
+      DB_PASSWORD_FILE: /run/secrets/app_db_password
+    secrets: [app_db_password]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    networks: [backend]
+
+  verify:
+    image: wallet-ledger:local
+    profiles: [verify]
+    command: ["sh", "/srv/scripts/verify-suite.sh"]
+    environment:
+      NODE_ENV: test
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: wallet
+      DB_USER: wallet_app
+      DB_PASSWORD_FILE: /run/secrets/app_db_password
+      ADMIN_DB_USER: wallet_admin
+      ADMIN_DB_PASSWORD_FILE: /run/secrets/postgres_password
+      API_URL: http://api:8000
+      ACCEPTANCE_ALLOW_NONLOCAL: "1"
+      RECONCILIATION_ACCEPTANCE: "1"
+      RISK_RULES_ACCEPTANCE: "1"
+    secrets: [postgres_password, app_db_password]
+    depends_on:
+      api:
+        condition: service_healthy
+      worker:
+        condition: service_started
+    networks: [backend]
+
 networks:
   backend:
     driver: bridge
@@ -92,6 +134,6 @@ volumes:
 
 secrets:
   postgres_password:
-    file: ./secrets/postgres_password
+    file: ${POSTGRES_PASSWORD_FILE:-./secrets/postgres_password}
   app_db_password:
-    file: ./secrets/app_db_password
+    file: ${APP_DB_PASSWORD_FILE:-./secrets/app_db_password}

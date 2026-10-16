@@ -1,0 +1,20 @@
+name: wallet-ledger-ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Run migrations, seed, and all acceptance checks in an isolated Compose stack
+        run: npm run verify

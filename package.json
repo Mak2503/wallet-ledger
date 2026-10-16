@@ -11,6 +11,8 @@
     "acceptance:reconciliation": "node --env-file-if-exists=.env dist/scripts/reconciliation_acceptance.js",
     "acceptance:risk-rules": "node --env-file-if-exists=.env dist/scripts/risk_rules_acceptance.js",
     "acceptance:statement-qa": "node --env-file-if-exists=.env dist/scripts/statement_qa_acceptance.js",
+    "seed:demo": "node --env-file-if-exists=.env dist/scripts/seed_demo.js",
+    "verify": "sh scripts/verify.sh",
     "reconciliation:explain": "node --env-file-if-exists=.env dist/scripts/reconciliation_explain.js",
     "reset-db": "node --env-file-if-exists=.env dist/scripts/reset_db.js",
     "migrate": "node --env-file-if-exists=.env dist/scripts/migrate.js"

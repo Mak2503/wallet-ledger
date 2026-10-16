@@ -18,6 +18,7 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 COPY --from=build --chown=node:node /srv/dist ./dist
 COPY --from=build --chown=node:node /srv/migrations ./migrations
+COPY --from=build --chown=node:node /srv/scripts/verify-suite.sh /srv/scripts/verify-suite.sh
 USER node
 EXPOSE 8000
 CMD ["node", "dist/app/main.js"]
