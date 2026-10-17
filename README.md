@@ -12,7 +12,7 @@ npm run verify
 
 It builds the containers, applies migrations from an empty PostgreSQL volume, starts Postgres, API, and the separate worker, seeds 1,000 users / 2,000 wallets / 100,000 balanced transfers, and runs the stampede, idempotency, reconciliation, risk, and statement prompt-injection acceptance scripts. It then removes only its uniquely named Compose project and database volume. CI runs the same command in [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
 
-The standalone additive demo seed is also available as `npm run seed:demo` after setting up `.env` and applying migrations. Each invocation creates another uniquely identified batch; it does not clear existing rows.
+The standalone additive demo seed is also available as `npm run seed:demo` after setting up `.env`, installing dependencies, building, and starting the database/migration services. Each invocation creates another uniquely identified batch; it does not clear existing rows.
 
 For a persistent local development stack, create two random local secret files and your ignored environment file:
 
@@ -32,11 +32,31 @@ Check startup with:
 
 ```sh
 docker compose ps
-docker compose logs migrate api
+docker compose logs migrate api worker
 curl http://127.0.0.1:8000/health
 ```
 
 The PostgreSQL database volume persists across container recreation. Schema changes belong in a new numbered SQL file under `migrations/`; the migration service records applied filenames in `schema_migrations` and runs before the API. Back up the database before applying migrations to valuable data. The Compose secret files are local plaintext files protected by `.gitignore`; for a real deployment, supply secrets through the orchestrator or an external secret manager instead.
+
+## Command reference
+
+| Command | Purpose and requirements |
+| --- | --- |
+| `npm run verify` | Build an isolated Compose stack from an empty database, seed the full demo dataset, run all acceptance checks, then remove that stack and its volume. Requires Docker Compose, Node.js 22+, npm, and OpenSSL. |
+| `docker compose up --build -d` | Start the persistent local database, migrations, API, and worker. Configure `.env` and the two secret files first. |
+| `docker compose down` | Stop the persistent stack while preserving its database volume. |
+| `npm ci && npm run build` | Install host-side dependencies and compile TypeScript for scripts run outside Docker. |
+| `npm run start` | Start the compiled API on the host; requires a running database and `.env`. |
+| `npm run seed:demo` | Add 1,000 users, 2,000 wallets, and 100,000 balanced transfers. Requires the host database settings in `.env`, an initialized database, and a completed build. It is additive. |
+| `npm run stampede` | Run the 20-trial concurrent transfer acceptance check against the configured database. |
+| `npm run acceptance:idempotency` | Run sequential, concurrent, in-flight, and changed-body idempotency scenarios against the local API. |
+| `RECONCILIATION_ACCEPTANCE=1 npm run acceptance:reconciliation` | Run the guarded reconciliation corruption scenario using the local API and admin database credentials. |
+| `RISK_RULES_ACCEPTANCE=1 npm run acceptance:risk-rules` | Run risk-rule checks and print measured rule query times. |
+| `npm run acceptance:statement-qa` | Run statement Q&A examples and the prompt-injection data-isolation check. |
+| `RECONCILIATION_EXPLAIN_SEED=1 npm run reconciliation:explain` | Create temporary benchmark data and print reconciliation and pagination query plans; requires admin database credentials. |
+| `RESET_DATABASE=1 npm run reset-db` | Clear development wallet data after an explicit confirmation. Use only with a disposable database. |
+
+Host-side scripts load `.env` automatically. Run `npm ci` and `npm run build` before them; the `verify` command handles its own container build and setup. Compose applies migrations automatically. For manual `npm run migrate`, configure `.env` with a database role that has schema migration privileges; the API role in `.env.example` is intentionally restricted.
 
 ## API
 
